@@ -322,8 +322,7 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         # Create the optimizer object.
         optimizer = tf.compat.v1.train.AdamOptimizer(self.policy[0].actor_lr)
         self.cg_optimizer = optimizer.minimize(
-            self.policy[0].actor_loss +
-            self.vf_ratio_ph * self.cg_weights * self.cg_loss,
+            self.policy[0].actor_loss + self.cg_weights * self.cg_loss,
             var_list=get_trainable_vars("level_0/model/pi/"),
         )
 
