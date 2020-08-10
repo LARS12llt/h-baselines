@@ -18,8 +18,6 @@ from hbaselines.envs.mixed_autonomy.envs.imitation import AVClosedImitationEnv
 
 # Number of vehicles in the network
 NUM_VEHICLES = [50, 75]
-# number of automated (RL) vehicles
-NUM_AUTOMATED = 5
 # Length of the ring (in meters)
 RING_LENGTH = 1500
 # Number of lanes in the ring
@@ -28,8 +26,7 @@ NUM_LANES = 1
 INCLUDE_NOISE = True
 
 
-def get_flow_params(fixed_density,
-                    stopping_penalty,
+def get_flow_params(stopping_penalty,
                     acceleration_penalty,
                     evaluate=False,
                     multiagent=False,
@@ -47,9 +44,6 @@ def get_flow_params(fixed_density,
 
     Parameters
     ----------
-    fixed_density : bool
-        specifies whether the number of human-driven vehicles updates in
-        between resets
     stopping_penalty : bool
         whether to include a stopping penalty
     acceleration_penalty : bool
@@ -85,33 +79,32 @@ def get_flow_params(fixed_density,
           (see flow.core.params.TrafficLightParams)
     """
     vehicles = VehicleParams()
-    for i in range(NUM_AUTOMATED):
-        vehicles.add(
-            veh_id="human_{}".format(i),
-            acceleration_controller=(IDMController, {
-                "a": 1.3,
-                "b": 2.0,
-                "noise": 0.3 if INCLUDE_NOISE else 0.0
-            }),
-            routing_controller=(ContinuousRouter, {}),
-            car_following_params=SumoCarFollowingParams(
-                min_gap=0.5,
-            ),
-            lane_change_params=SumoLaneChangeParams(
-                lane_change_mode=1621,
-            ),
-            num_vehicles=NUM_VEHICLES[0] - NUM_AUTOMATED if i == 0 else 0)
-        vehicles.add(
-            veh_id="rl_{}".format(i),
-            acceleration_controller=(RLController, {}),
-            routing_controller=(ContinuousRouter, {}),
-            car_following_params=SumoCarFollowingParams(
-                min_gap=0.5,
-            ),
-            lane_change_params=SumoLaneChangeParams(
-                lane_change_mode=0,  # no lane changes by automated vehicles
-            ),
-            num_vehicles=NUM_AUTOMATED if i == 0 else 0)
+    vehicles.add(
+        veh_id="human",
+        acceleration_controller=(IDMController, {
+            "a": 1.3,
+            "b": 2.0,
+            "noise": 0.3 if INCLUDE_NOISE else 0.0
+        }),
+        routing_controller=(ContinuousRouter, {}),
+        car_following_params=SumoCarFollowingParams(
+            min_gap=0.5,
+        ),
+        lane_change_params=SumoLaneChangeParams(
+            lane_change_mode=1621,
+        ),
+        num_vehicles=21)
+    vehicles.add(
+        veh_id="rl",
+        acceleration_controller=(RLController, {}),
+        routing_controller=(ContinuousRouter, {}),
+        car_following_params=SumoCarFollowingParams(
+            min_gap=0.5,
+        ),
+        lane_change_params=SumoLaneChangeParams(
+            lane_change_mode=0,  # no lane changes by automated vehicles
+        ),
+        num_vehicles=1)
 
     additional_net_params = ADDITIONAL_NET_PARAMS.copy()
     additional_net_params["length"] = RING_LENGTH
@@ -145,24 +138,22 @@ def get_flow_params(fixed_density,
         sim=SumoParams(
             use_ballistic=True,
             render=False,
-            sim_step=0.5,
+            sim_step=0.1,
+            restart_instance=True,
         ),
 
         # environment related parameters (see flow.core.params.EnvParams)
         env=EnvParams(
-            horizon=1800,
-            warmup_steps=50,
+            horizon=1500,
+            warmup_steps=1500,
             sims_per_step=2,
             evaluate=evaluate,
             additional_params={
                 "max_accel": 1,
                 "max_decel": 1,
-                "target_velocity": 30,
+                "target_velocity": 10,
                 "stopping_penalty": stopping_penalty,
                 "acceleration_penalty": acceleration_penalty,
-                "num_vehicles": None if fixed_density else NUM_VEHICLES,
-                "even_distribution": False,
-                "sort_vehicles": True,
                 "expert_model": (IDMController, {
                     "a": 1.3,
                     "b": 2.0,
@@ -182,9 +173,5 @@ def get_flow_params(fixed_density,
 
         # parameters specifying the positioning of vehicles upon init/reset
         # (see flow.core.params.InitialConfig)
-        initial=InitialConfig(
-            spacing="random",
-            min_gap=0.5,
-            shuffle=True,
-        ),
+        initial=InitialConfig(),
     )

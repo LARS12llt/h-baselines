@@ -407,16 +407,15 @@ ENV_ATTRIBUTES = {
     "ring-v0": {
         "meta_ac_space": lambda relative_goals: Box(
             low=-5 if relative_goals else 0,
-            high=5 if relative_goals else 20,
-            shape=(5,),
+            high=5 if relative_goals else 10,
+            shape=(1,),
             dtype=np.float32
         ),
-        "state_indices": [5 * i for i in range(5)],
+        "state_indices": [5 * i for i in range(1)],
         "env": lambda evaluate, render, multiagent, shared, maddpg: FlowEnv(
             flow_params=ring(
-                fixed_density=False,
-                stopping_penalty=True,
-                acceleration_penalty=True,
+                stopping_penalty=False,
+                acceleration_penalty=False,
                 evaluate=evaluate,
                 multiagent=multiagent,
             ),
