@@ -309,13 +309,21 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         # Scale by the worker reward scale.
         reward_fn *= self.intrinsic_reward_scale
 
+        # A Ratio for scaling the effect of the loss by the relative magnitudes
+        # of the Q-values.
+        self.vf_ratio_ph = tf.placeholder(
+            tf.float32, shape=(), name="vf_ratio")
+
         # Compute the worker loss with respect to the meta policy actions.
-        self.cg_loss = - tf.reduce_mean(worker_with_meta_obs) - reward_fn
+        self.cg_loss = - tf.reduce_mean(
+            self.vf_ratio_ph * worker_with_meta_obs) \
+            - self.vf_ratio_ph * reward_fn
 
         # Create the optimizer object.
         optimizer = tf.compat.v1.train.AdamOptimizer(self.policy[0].actor_lr)
         self.cg_optimizer = optimizer.minimize(
-            self.policy[0].actor_loss + self.cg_weights * self.cg_loss,
+            self.policy[0].actor_loss +
+            self.vf_ratio_ph * self.cg_weights * self.cg_loss,
             var_list=get_trainable_vars("level_0/model/pi/"),
         )
 
@@ -365,6 +373,17 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         rewards[0] = rewards[0].reshape(-1, 1)
         terminals1[0] = terminals1[0].reshape(-1, 1)
 
+        # Compute the value function ratio.
+        # meta_vf, worker_vf = self.sess.run(
+        #     [self.policy[0].actor_loss,
+        #      self.policy[1].actor_loss],
+        #     {self.policy[0].obs_ph: obs0[0],
+        #      self.policy[1].obs_ph: obs0[1]}
+        # )
+        # vf_ratio = abs(meta_vf / (worker_vf + 1e-6))
+        vf_ratio = abs(np.mean(rewards[0]) / (abs(np.mean(rewards[1])) + 1e-6))
+        # print(vf_ratio)
+
         # Update operations for the critic networks.
         step_ops = [self.policy[0].critic_loss,
                     self.policy[0].critic_optimizer[0],
@@ -375,7 +394,8 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
             self.policy[0].action_ph: actions[0],
             self.policy[0].rew_ph: rewards[0],
             self.policy[0].obs1_ph: obs1[0],
-            self.policy[0].terminals1: terminals1[0]
+            self.policy[0].terminals1: terminals1[0],
+            self.vf_ratio_ph: vf_ratio,
         }
 
         if update_actor:
