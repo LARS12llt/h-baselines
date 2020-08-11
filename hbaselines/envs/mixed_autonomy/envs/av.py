@@ -4,7 +4,6 @@ import numpy as np
 from gym.spaces import Box
 from copy import deepcopy
 import random
-import os
 
 from flow.envs import Env
 from flow.core.params import InFlows
@@ -361,11 +360,34 @@ class AVClosedEnv(AVEnv):
         new_net_params = deepcopy(self._network_net_params)
         new_net_params.additional_params["length"] = ring_length
 
+        # Reintroduce the vehicles. Handles a bug where the initial positions
+        # are stored in between resets.
+        params = self._network_vehicles.type_parameters
+        new_vehicles = VehicleParams()
+        new_vehicles.add(
+            veh_id="human",
+            acceleration_controller=params["human"]["acceleration_controller"],
+            lane_change_controller=params["human"]["lane_change_controller"],
+            routing_controller=params["human"]["routing_controller"],
+            initial_speed=params["human"]["initial_speed"],
+            car_following_params=params["human"]["car_following_params"],
+            lane_change_params=params["human"]["lane_change_params"],
+            num_vehicles=21)
+        new_vehicles.add(
+            veh_id="rl",
+            acceleration_controller=params["rl"]["acceleration_controller"],
+            lane_change_controller=params["rl"]["lane_change_controller"],
+            routing_controller=params["rl"]["routing_controller"],
+            initial_speed=params["rl"]["initial_speed"],
+            car_following_params=params["rl"]["car_following_params"],
+            lane_change_params=params["rl"]["lane_change_params"],
+            num_vehicles=1)
+
         # Update the network.
         self.network = self._network_cls(
             self._network_name,
             net_params=new_net_params,
-            vehicles=self._network_vehicles,
+            vehicles=new_vehicles,
             initial_config=self._network_initial_config,
             traffic_lights=self._network_traffic_lights,
         )

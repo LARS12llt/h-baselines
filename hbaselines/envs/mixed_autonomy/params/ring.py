@@ -145,7 +145,7 @@ def get_flow_params(stopping_penalty,
         # environment related parameters (see flow.core.params.EnvParams)
         env=EnvParams(
             horizon=1500,
-            warmup_steps=1500,
+            warmup_steps=750,
             sims_per_step=2,
             evaluate=evaluate,
             additional_params={

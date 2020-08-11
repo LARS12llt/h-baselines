@@ -379,7 +379,7 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         #     {self.policy[0].obs_ph: obs0[0],
         #      self.policy[1].obs_ph: obs0[1]}
         # )
-        # vf_ratio = abs(meta_vf / (worker_vf + 1e-6))
+        # vf_ratio = abs(meta_vf / (abs(worker_vf) + 1e-6))
         vf_ratio = abs(np.mean(rewards[0]) / (abs(np.mean(rewards[1])) + 1e-6))
         # print(vf_ratio)
 
