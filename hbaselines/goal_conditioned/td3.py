@@ -368,10 +368,6 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         assert self.num_levels == 2, \
             "Connected gradients currently only works for 2-level hierarchies."
 
-        # Reshape to match previous behavior and placeholder shape.
-        rewards[0] = rewards[0].reshape(-1, 1)
-        terminals1[0] = terminals1[0].reshape(-1, 1)
-
         # Compute the value function ratio.
         # meta_vf, worker_vf = self.sess.run(
         #     [self.policy[0].actor_loss,
@@ -380,8 +376,12 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         #      self.policy[1].obs_ph: obs0[1]}
         # )
         # vf_ratio = abs(meta_vf / (abs(worker_vf) + 1e-6))
-        vf_ratio = abs(np.mean(rewards[0]) / (abs(np.mean(rewards[1])) + 1e-6))
+        vf_ratio = (max(rewards[0]) - min(rewards[0])) / (max(rewards[1]) - min(rewards[1]) + 1e-6)
         # print(vf_ratio)
+
+        # Reshape to match previous behavior and placeholder shape.
+        rewards[0] = rewards[0].reshape(-1, 1)
+        terminals1[0] = terminals1[0].reshape(-1, 1)
 
         # Update operations for the critic networks.
         step_ops = [self.policy[0].critic_loss,
