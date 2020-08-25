@@ -261,8 +261,7 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         """Create the cooperative gradients meta-policy optimizer."""
         # A Ratio for scaling the effect of the loss by the relative stds of
         # the rewards.
-        self.vf_ratio_ph = tf.placeholder(
-            tf.float32, shape=(), name="vf_ratio")
+        self.vf_ratio_ph = tf.placeholder(tf.float32, shape=(), name="vf_rat")
 
         self.cg_loss = []
         self.cg_optimizer = []
