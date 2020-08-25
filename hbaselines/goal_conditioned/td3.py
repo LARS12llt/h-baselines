@@ -259,72 +259,81 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
 
     def _setup_cooperative_gradients(self):
         """Create the cooperative gradients meta-policy optimizer."""
-        # Index relevant variables based on self.goal_indices
-        meta_obs0 = self.crop_to_goal(self.policy[0].obs_ph)
-        meta_obs1 = self.crop_to_goal(self.policy[0].obs1_ph)
-        worker_obs0 = self.crop_to_goal(self.policy[-1].obs_ph)
-        worker_obs1 = self.crop_to_goal(self.policy[-1].obs1_ph)
-
-        if self.relative_goals:
-            # Relative goal formulation as per HIRO.
-            goal = meta_obs0 + self.policy[0].actor_tf - meta_obs1
-        else:
-            # Goal is the direct output from the meta policy in this case.
-            goal = self.policy[0].actor_tf
-
-        # Concatenate the output from the manager with the worker policy.
-        obs_shape = self.policy[-1].ob_space.shape[0]
-        obs = tf.concat([self.policy[-1].obs_ph[:, :obs_shape], goal], axis=-1)
-
-        # Create the worker policy with inputs directly from the manager.
-        with tf.compat.v1.variable_scope("level_1/model"):
-            worker_with_meta_obs = self.policy[-1].make_critic(
-                obs, self.policy[-1].action_ph, reuse=True, scope="qf_0")
-
-        # Create a tensorflow operation that mimics the reward function that is
-        # used to provide feedback to the worker.
-        if self.intrinsic_reward_type.startswith("scaled"):
-            # Scale the observations/goals by the action space of the upper-
-            # level policy if requested.
-            ac_space = self.policy[0].ac_space
-            scale = 0.5 * (ac_space.high - ac_space.low)
-            worker_obs0 /= scale
-            goal /= scale
-            worker_obs1 /= scale
-
-        if self.relative_goals:
-            # Implement relative goals if requested.
-            goal += worker_obs0
-
-        if self.intrinsic_reward_type.endswith("exp_negative_distance"):
-            reward_fn = tf.reduce_mean(tf.exp(-tf.reduce_sum(
-                tf.square(worker_obs0 + goal - worker_obs1), axis=1)))
-        elif self.intrinsic_reward_type.endswith("negative_distance"):
-            reward_fn = -tf.compat.v1.losses.mean_squared_error(
-                worker_obs0 + goal, worker_obs1)
-        else:
-            raise ValueError("Unknown intrinsic reward type: {}".format(
-                self.intrinsic_reward_type))
-
-        # Scale by the worker reward scale.
-        reward_fn *= self.intrinsic_reward_scale
-
-        # A Ratio for scaling the effect of the loss by the relative magnitudes
-        # of the Q-values.
+        # A Ratio for scaling the effect of the loss by the relative stds of
+        # the rewards.
         self.vf_ratio_ph = tf.placeholder(
             tf.float32, shape=(), name="vf_ratio")
 
-        # Compute the worker loss with respect to the meta policy actions.
-        self.cg_loss = - tf.reduce_mean(
-            self.vf_ratio_ph * worker_with_meta_obs) \
-            - self.vf_ratio_ph * reward_fn
+        self.cg_loss = []
+        self.cg_optimizer = []
+        for level in range(self.num_levels - 1):
+            # Index relevant variables based on self.goal_indices
+            meta_obs0 = self.crop_to_goal(self.policy[level].obs_ph)
+            meta_obs1 = self.crop_to_goal(self.policy[level].obs1_ph)
+            worker_obs0 = self.crop_to_goal(self.policy[level + 1].obs_ph)
+            worker_obs1 = self.crop_to_goal(self.policy[level + 1].obs1_ph)
 
-        # Create the optimizer object.
-        optimizer = tf.compat.v1.train.AdamOptimizer(self.policy[0].actor_lr)
-        self.cg_optimizer = optimizer.minimize(
-            self.policy[0].actor_loss + self.cg_weights * self.cg_loss,
-            var_list=get_trainable_vars("level_0/model/pi/"),
-        )
+            if self.relative_goals:
+                # Relative goal formulation as per HIRO.
+                goal = meta_obs0 + self.policy[level].actor_tf - meta_obs1
+            else:
+                # Goal is the direct output from the meta policy in this case.
+                goal = self.policy[level].actor_tf
+
+            # Concatenate the output from the manager with the worker policy.
+            obs_shape = self.policy[level + 1].ob_space.shape[0]
+            obs = tf.concat(
+                [self.policy[level + 1].obs_ph[:, :obs_shape], goal], axis=-1)
+
+            # Create the worker policy with inputs directly from the manager.
+            with tf.compat.v1.variable_scope("level_{}/model".format(level+1)):
+                worker_with_meta_obs = self.policy[level + 1].make_critic(
+                    obs,
+                    self.policy[level + 1].action_ph,
+                    reuse=True, scope="qf_0")
+
+            # Create a tensorflow operation that mimics the reward function
+            # that is used to provide feedback to the worker.
+            if self.intrinsic_reward_type.startswith("scaled"):
+                # Scale the observations/goals by the action space of the
+                # upper-level policy if requested.
+                ac_space = self.policy[level].ac_space
+                scale = 0.5 * (ac_space.high - ac_space.low)
+                worker_obs0 /= scale
+                goal /= scale
+                worker_obs1 /= scale
+
+            if self.relative_goals:
+                # Implement relative goals if requested.
+                goal += worker_obs0
+
+            if self.intrinsic_reward_type.endswith("exp_negative_distance"):
+                reward_fn = tf.reduce_mean(tf.exp(-tf.reduce_sum(
+                    tf.square(worker_obs0 + goal - worker_obs1), axis=1)))
+            elif self.intrinsic_reward_type.endswith("negative_distance"):
+                reward_fn = -tf.compat.v1.losses.mean_squared_error(
+                    worker_obs0 + goal, worker_obs1)
+            else:
+                raise ValueError("Unknown intrinsic reward type: {}".format(
+                    self.intrinsic_reward_type))
+
+            # Scale by the worker reward scale.
+            reward_fn *= self.intrinsic_reward_scale
+
+            # Compute the worker loss with respect to the meta policy actions.
+            cg_loss = \
+                - tf.reduce_mean(self.vf_ratio_ph * worker_with_meta_obs) \
+                - self.vf_ratio_ph * reward_fn
+            self.cg_loss.append(cg_loss)
+
+            # Create the optimizer object.
+            optimizer = tf.compat.v1.train.AdamOptimizer(
+                self.policy[level].actor_lr)
+            self.cg_optimizer.append(optimizer.minimize(
+                self.policy[level].actor_loss + self.cg_weights * cg_loss,
+                var_list=get_trainable_vars(
+                    "level_{}/model/pi/".format(level)),
+            ))
 
     def _cooperative_gradients_update(self,
                                       obs0,
@@ -332,6 +341,7 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
                                       rewards,
                                       obs1,
                                       terminals1,
+                                      level_num,
                                       update_actor=True):
         """Perform the gradient update procedure for the CHER algorithm.
 
@@ -354,6 +364,8 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
             (batch_size,) vector of rewards for every level in the hierarchy
         terminals1 : list of numpy bool
             (batch_size,) vector of done masks for every level in the hierarchy
+        level_num : int
+            the hierarchy level number of the policy to optimize
         update_actor : bool
             specifies whether to update the actor policy of the meta policy.
             The critic policy is still updated if this value is set to False.
@@ -365,48 +377,41 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         float
             meta-policy actor loss
         """
-        assert self.num_levels == 2, \
-            "Connected gradients currently only works for 2-level hierarchies."
-
-        # Compute the value function ratio.
-        # meta_vf, worker_vf = self.sess.run(
-        #     [self.policy[0].actor_loss,
-        #      self.policy[1].actor_loss],
-        #     {self.policy[0].obs_ph: obs0[0],
-        #      self.policy[1].obs_ph: obs0[1]}
-        # )
-        # vf_ratio = abs(meta_vf / (abs(worker_vf) + 1e-6))
-        vf_ratio = (max(rewards[0]) - min(rewards[0])) / (max(rewards[1]) - min(rewards[1]) + 1e-6)
-        # print(vf_ratio)
+        vf_ratio = np.std(rewards[level_num]) \
+            / (np.std(rewards[level_num + 1]) + 1e-6)
 
         # Reshape to match previous behavior and placeholder shape.
-        rewards[0] = rewards[0].reshape(-1, 1)
-        terminals1[0] = terminals1[0].reshape(-1, 1)
+        rewards[level_num] = rewards[level_num].reshape(-1, 1)
+        terminals1[level_num] = terminals1[level_num].reshape(-1, 1)
 
         # Update operations for the critic networks.
-        step_ops = [self.policy[0].critic_loss,
-                    self.policy[0].critic_optimizer[0],
-                    self.policy[0].critic_optimizer[1]]
+        step_ops = [
+            self.policy[level_num].critic_loss,
+            self.policy[level_num].critic_optimizer[0],
+            self.policy[level_num].critic_optimizer[1],
+        ]
 
         feed_dict = {
-            self.policy[0].obs_ph: obs0[0],
-            self.policy[0].action_ph: actions[0],
-            self.policy[0].rew_ph: rewards[0],
-            self.policy[0].obs1_ph: obs1[0],
-            self.policy[0].terminals1: terminals1[0],
+            self.policy[level_num].obs_ph: obs0[level_num],
+            self.policy[level_num].action_ph: actions[level_num],
+            self.policy[level_num].rew_ph: rewards[level_num],
+            self.policy[level_num].obs1_ph: obs1[level_num],
+            self.policy[level_num].terminals1: terminals1[level_num],
             self.vf_ratio_ph: vf_ratio,
         }
 
         if update_actor:
             # Actor updates and target soft update operation.
-            step_ops += [self.policy[0].actor_loss,
-                         self.cg_optimizer,  # This is what's replaced.
-                         self.policy[0].target_soft_updates]
+            step_ops += [
+                self.policy[level_num].actor_loss,
+                self.cg_optimizer[level_num],  # This is what's replaced.
+                self.policy[level_num].target_soft_updates,
+            ]
 
             feed_dict.update({
-                self.policy[-1].obs_ph: obs0[-1],
-                self.policy[-1].action_ph: actions[-1],
-                self.policy[-1].obs1_ph: obs1[-1],
+                self.policy[level_num + 1].obs_ph: obs0[level_num + 1],
+                self.policy[level_num + 1].action_ph: actions[level_num + 1],
+                self.policy[level_num + 1].obs1_ph: obs1[level_num + 1],
             })
 
         # Perform the update operations and collect the critic loss.
