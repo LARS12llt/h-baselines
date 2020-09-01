@@ -129,6 +129,8 @@ class GoalConditionedPolicy(ActorCriticPolicy):
                  subgoal_testing_rate,
                  cooperative_gradients,
                  cg_weights,
+                 exploration_strategy,
+                 exploration_coverage,
                  scope=None,
                  env_name="",
                  num_envs=1,
@@ -269,10 +271,8 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         # Step 1: Create the policies for the individual levels.              #
         # =================================================================== #
 
-        # Create the exploration strategy.
-        self.exp_strategy = EpsilonGreedy(meta_ac_space)
-
         self.policy = []
+        self.exp_strategy = [None for _ in range(num_levels)]
 
         # The policies are ordered from the highest level to lowest level
         # policies in the hierarchy.
@@ -312,6 +312,17 @@ class GoalConditionedPolicy(ActorCriticPolicy):
                     scope=scope_i,
                     **(additional_params or {}),
                 ))
+
+                # Create the exploration strategy for the policy.
+                if exploration_strategy is not None:
+                    # Only provide an exploration strategy to a policy if the
+                    # chosen coverage allows it.
+                    if (i == 0 and exploration_coverage == "top") \
+                            or (i > 0 and exploration_coverage == "bottom") \
+                            or exploration_coverage == "all":
+                        self.exp_strategy[i] = exploration_strategy[0](
+                            ac_space=ac_space_i,
+                            **exploration_strategy[1])
 
         # =================================================================== #
         # Step 2: Create attributes for the replay buffer.                    #
@@ -567,7 +578,7 @@ class GoalConditionedPolicy(ActorCriticPolicy):
 
                 # Apply exploration noise to the action.
                 if not random_actions:
-                    meta_action = self.exp_strategy.apply_noise(meta_action)
+                    meta_action = self.exp_strategy[i].apply_noise(meta_action)
 
                 # Add to the internal list of meta-actions.
                 self._meta_action[env_num][i] = meta_action
@@ -585,6 +596,10 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         # action by the lowest level policy).
         action = self.policy[-1].get_action(
             obs, self._meta_action[env_num][-1], apply_noise, random_actions)
+
+        # Apply exploration noise to the action.
+        if not random_actions:
+            action = self.exp_strategy[-1].apply_noise(action)
 
         return action
 
