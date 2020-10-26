@@ -191,6 +191,7 @@ class MultiActorCriticPolicy(ActorCriticPolicy):
             use_huber=use_huber,
             l2_penalty=l2_penalty,
             model_params=model_params,
+            num_envs=num_envs,
         )
 
         self.shared = shared
@@ -230,13 +231,6 @@ class MultiActorCriticPolicy(ActorCriticPolicy):
         update_actor : bool
             specifies whether to update the actor policy. The critic policy is
             still updated if this value is set to False.
-
-        Returns
-        -------
-        float
-            critic loss
-        float
-            actor loss
         """
         if self.maddpg:
             return self._update_maddpg(update_actor, **kwargs)
@@ -398,6 +392,7 @@ class MultiActorCriticPolicy(ActorCriticPolicy):
             use_huber=self.use_huber,
             l2_penalty=self.l2_penalty,
             model_params=self.model_params,
+            num_envs=self.num_envs,
             **self.additional_params
         )
 
@@ -436,14 +431,8 @@ class MultiActorCriticPolicy(ActorCriticPolicy):
 
     def _update_basic(self, update_actor=True, **kwargs):
         """See update."""
-        actor_loss = {}
-        critic_loss = {}
         for key in self.agents.keys():
-            c, a = self.agents[key].update(update_actor=update_actor, **kwargs)
-            critic_loss[key] = c
-            actor_loss[key] = a
-
-        return critic_loss, actor_loss
+            self.agents[key].update(update_actor=update_actor, **kwargs)
 
     def _get_action_basic(self,
                           obs,

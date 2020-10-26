@@ -203,7 +203,7 @@ def main(args):
     # Perform the evaluation procedure.
     episode_rewards = []
 
-    # # Add an emission path to Flow environments.
+    # Add an emission path to Flow environments.
     if env_name in FLOW_ENV_NAMES:
         sim_params = deepcopy(env.wrapped_env.sim_params)
         sim_params.emission_path = "./flow_results"
@@ -250,9 +250,9 @@ def main(args):
 
                 # Visualize the sub-goals of the hierarchical policy.
                 if hasattr(policy, "_meta_action") \
-                        and policy._meta_action is not None \
+                        and policy.meta_action is not None \
                         and hasattr(env, "set_goal"):
-                    goal = policy._meta_action[0][0] + (
+                    goal = policy.meta_action[0][0] + (
                         obs[policy.goal_indices]
                         if policy.relative_goals else 0)
                     env.set_goal(goal)
@@ -302,7 +302,8 @@ def main(args):
             # Print total returns from a given episode.
             episode_rewards.append(total_reward)
             print("Round {}, return: {}".format(episode_num, total_reward))
-            print(info)
+            for key in info.keys():
+                print("Round {}, {}: {}".format(episode_num, key, info[key]))
 
             # Save the video.
             if not flags.no_render and env_name not in FLOW_ENV_NAMES \

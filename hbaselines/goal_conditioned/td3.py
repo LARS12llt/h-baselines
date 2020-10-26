@@ -39,6 +39,7 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
                  subgoal_testing_rate,
                  cooperative_gradients,
                  cg_weights,
+                 cg_delta,
                  pretrain_worker,
                  pretrain_path,
                  pretrain_ckpt,
@@ -119,6 +120,10 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
             weights for the gradients of the loss of the lower-level policies
             with respect to the parameters of the higher-level policies. Only
             used if `cooperative_gradients` is set to True.
+        cg_delta : float
+            the desired lower-level expected returns. If set to None, a fixed
+            Lagrangian specified by cg_weights is used instead. Only used if
+            `cooperative_gradients` is set to True.
         pretrain_worker : bool
             specifies whether you are pre-training the lower-level policies.
             Actions by the high-level policy are randomly sampled from its
@@ -154,6 +159,7 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
             subgoal_testing_rate=subgoal_testing_rate,
             cooperative_gradients=cooperative_gradients,
             cg_weights=cg_weights,
+            cg_delta=cg_delta,
             scope=scope,
             env_name=env_name,
             pretrain_worker=pretrain_worker,
@@ -277,13 +283,17 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
     # ======================================================================= #
 
     def _setup_cooperative_gradients(self):
-        self.t = 0
         """Create the cooperative gradients meta-policy optimizer."""
-        # placeholder for the lambda term.
-        self.cg_weights = [
-            tf.compat.v1.Variable(initial_value=-4.20, trainable=True)
-            for _ in range(self.num_levels - 1)]
-        self.cg_delta = -4 * (1 / (1 - self.gamma))
+        self._n_train_steps = 0
+
+        if self.cg_delta is not None:
+            # placeholder for the lambda term.
+            self.cg_weights = [
+                tf.compat.v1.Variable(initial_value=-4.20, trainable=True)
+                for _ in range(self.num_levels - 1)]
+        else:
+            self.cg_weights = [
+                self.cg_weights for _ in range(self.num_levels - 1)]
 
         self.cg_loss = []
         self.cg_optimizer = []
@@ -355,30 +365,31 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
                     "level_{}/model/pi/".format(level)),
             ))
 
-            cg_weights_loss = \
-                tf.reduce_mean(
-                    tf.exp(self.cg_weights[level]) * tf.stop_gradient(
-                        worker_with_meta_obs + reward_fn - self.cg_delta
+            if self.cg_delta is not None:
+                cg_weights_loss = \
+                    tf.reduce_mean(
+                        tf.exp(self.cg_weights[level]) * tf.stop_gradient(
+                            worker_with_meta_obs + reward_fn - self.cg_delta
+                        )
                     )
-                )
-            optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=3e-4)
-            self.cg_weights_optimizer = optimizer.minimize(
-                cg_weights_loss,
-                var_list=[self.cg_weights[level]])
+                optimizer = tf.compat.v1.train.AdamOptimizer(self.actor_lr)
+                self.cg_weights_optimizer = optimizer.minimize(
+                    cg_weights_loss,
+                    var_list=[self.cg_weights[level]])
 
-            # Add to tensorboard.
-            tf.compat.v1.summary.scalar(
-                "level_{}/cg_weights_log".format(level),
-                self.cg_weights[level])
-            tf.compat.v1.summary.scalar(
-                "level_{}/cg_weights".format(level),
-                tf.exp(self.cg_weights[level]))
-            tf.compat.v1.summary.scalar(
-                "level_{}/cg_weights_loss".format(level),
-                cg_weights_loss)
-            tf.compat.v1.summary.scalar(
-                "level_{}/worker_with_meta_obs".format(level),
-                tf.reduce_mean(worker_with_meta_obs))
+                # Add to tensorboard.
+                tf.compat.v1.summary.scalar(
+                    "level_{}/cg_weights_log".format(level),
+                    self.cg_weights[level])
+                tf.compat.v1.summary.scalar(
+                    "level_{}/cg_weights".format(level),
+                    tf.exp(self.cg_weights[level]))
+                tf.compat.v1.summary.scalar(
+                    "level_{}/cg_weights_loss".format(level),
+                    cg_weights_loss)
+                tf.compat.v1.summary.scalar(
+                    "level_{}/worker_with_meta_obs".format(level),
+                    tf.reduce_mean(worker_with_meta_obs))
 
     def _cooperative_gradients_update(self,
                                       obs0,
@@ -414,15 +425,9 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         update_actor : bool
             specifies whether to update the actor policy of the meta policy.
             The critic policy is still updated if this value is set to False.
-
-        Returns
-        -------
-        [float, float]
-            meta-policy critic loss
-        float
-            meta-policy actor loss
         """
-        self.t += 1
+        self._n_train_steps += 1
+
         # Reshape to match previous behavior and placeholder shape.
         rewards[level_num] = rewards[level_num].reshape(-1, 1)
         terminals1[level_num] = terminals1[level_num].reshape(-1, 1)
@@ -444,7 +449,7 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
         }
 
         # Update the cg_weights terms.
-        if self.t > 1000:
+        if self._n_train_steps > 1000 and self.cg_delta is not None:
             step_ops += [self.cg_weights_optimizer]
 
         if update_actor:
@@ -462,13 +467,3 @@ class GoalConditionedPolicy(BaseGoalConditionedPolicy):
 
         # Perform the update operations.
         self.sess.run(step_ops, feed_dict=feed_dict)
-
-    def get_td_map(self):
-        """See parent class.
-
-        This adds the cg_weights term in case cooperative gradients are being
-        used.
-        """
-        td_map = super(GoalConditionedPolicy, self).get_td_map()
-
-        return td_map

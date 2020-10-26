@@ -141,6 +141,7 @@ class GoalConditionedPolicy(ActorCriticPolicy):
                  subgoal_testing_rate,
                  cooperative_gradients,
                  cg_weights,
+                 cg_delta,
                  pretrain_worker,
                  pretrain_path,
                  pretrain_ckpt,
@@ -230,6 +231,10 @@ class GoalConditionedPolicy(ActorCriticPolicy):
             weights for the gradients of the loss of the lower-level policies
             with respect to the parameters of the higher-level policies. Only
             used if `cooperative_gradients` is set to True.
+        cg_delta : float
+            the desired lower-level expected returns. If set to None, a fixed
+            Lagrangian specified by cg_weights is used instead. Only used if
+            `cooperative_gradients` is set to True.
         pretrain_worker : bool
             specifies whether you are pre-training the lower-level policies.
             Actions by the high-level policy are randomly sampled from the
@@ -262,6 +267,7 @@ class GoalConditionedPolicy(ActorCriticPolicy):
             use_huber=use_huber,
             l2_penalty=l2_penalty,
             model_params=model_params,
+            num_envs=num_envs,
         )
 
         assert num_levels >= 2, "num_levels must be greater than or equal to 2"
@@ -276,14 +282,10 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         self.subgoal_testing_rate = subgoal_testing_rate
         self.cooperative_gradients = cooperative_gradients
         self.cg_weights = cg_weights
+        self.cg_delta = cg_delta
         self.pretrain_worker = pretrain_worker
         self.pretrain_path = pretrain_path
         self.pretrain_ckpt = pretrain_ckpt
-
-        # variables for computing the running mean and std
-        self._n = [0 for _ in range(num_levels)]
-        self._running_mean = [0 for _ in range(num_levels)]
-        self._running_std = [0 for _ in range(num_levels)]
 
         # Get the observation and action space of the higher level policies.
         meta_ac_space = get_meta_ac_space(
@@ -362,8 +364,8 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         )
 
         # current action by the meta-level policies
-        self._meta_action = [[None for _ in range(num_levels - 1)]
-                             for _ in range(num_envs)]
+        self.meta_action = [[None for _ in range(num_levels - 1)]
+                            for _ in range(num_envs)]
 
         # a list of all the actions performed by each level in the hierarchy,
         # ordered from highest to lowest level policy. A separate element is
@@ -558,28 +560,23 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         update_actor : bool
             specifies whether to update the actor policy. The critic policy is
             still updated if this value is set to False.
-
-        Returns
-        -------
-         ([float, float], [float, float])
-            the critic loss for every policy in the hierarchy
-        (float, float)
-            the actor loss for every policy in the hierarchy
         """
         # Not enough samples in the replay buffer.
         if not self.replay_buffer.can_sample():
-            return tuple([[0, 0] for _ in range(self.num_levels)]), \
-                tuple([0 for _ in range(self.num_levels)])
+            return
 
         # Specifies whether to remove additional data from the replay buffer
         # sampling procedure. Since only a subset of algorithms use additional
         # data, removing it can speedup the other algorithms.
         with_additional = self.off_policy_corrections
 
+        # Specifies the levels to collect data from, corresponding to the
+        # levels that will be trained. This also helps speedup the operation.
+        collect_levels = [i for i in range(self.num_levels - 1)
+                          if kwargs["update_meta"][i]
+                          and not self.pretrain_worker] + [self.num_levels - 1]
+
         # Get a batch.
-        collect_levels = \
-            [i for i in range(self.num_levels - 1)
-             if kwargs["update_meta"][i]] + [self.num_levels - 1]
         obs0, obs1, act, rew, done, additional = self.replay_buffer.sample(
             with_additional, collect_levels)
 
@@ -643,23 +640,23 @@ class GoalConditionedPolicy(ActorCriticPolicy):
             if self._update_meta(i, env_num):
                 if self.pretrain_worker:
                     # Sample goals randomly when performing pre-training.
-                    self._meta_action[env_num][i] = np.array([
+                    self.meta_action[env_num][i] = np.array([
                         self.policy[i].ac_space.sample()])
                 else:
                     context_i = context if i == 0 \
-                        else self._meta_action[env_num][i - 1]
+                        else self.meta_action[env_num][i - 1]
 
                     # Update the meta action based on the output from the
                     # policy if the time period requires is.
-                    self._meta_action[env_num][i] = self.policy[i].get_action(
+                    self.meta_action[env_num][i] = self.policy[i].get_action(
                         obs, context_i, apply_noise, random_actions)
             else:
                 # Update the meta-action in accordance with a fixed transition
                 # function.
-                self._meta_action[env_num][i] = self.goal_transition_fn(
+                self.meta_action[env_num][i] = self.goal_transition_fn(
                     obs0=np.array(
                         [self._observations[env_num][-1][self.goal_indices]]),
-                    goal=self._meta_action[env_num][i],
+                    goal=self.meta_action[env_num][i],
                     obs1=obs[:, self.goal_indices]
                 )
 
@@ -667,7 +664,7 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         # action by the lowest level policy).
         action = self.policy[-1].get_action(
             obs=obs,
-            context=self._meta_action[env_num][-1],
+            context=self.meta_action[env_num][-1],
             apply_noise=apply_noise,
             random_actions=random_actions and self.pretrain_path is None)
 
@@ -687,29 +684,19 @@ class GoalConditionedPolicy(ActorCriticPolicy):
             # Actions and intrinsic rewards for the high-level policies are
             # only updated when the action is recomputed by the graph.
             if t_start % self.meta_period ** (i-1) == 0:
-                # Update the running mean and stds once a step is done.
-                if not evaluate and len(self._rewards[env_num][-i]) > 0:
-                    rew = self._rewards[env_num][-i][-1]
-                    prev_mean = self._running_mean[-i]
-                    self._n[-i] += 1
-                    self._running_mean[-i] += \
-                        (rew - self._running_mean[-i]) / self._n[-i]
-                    self._running_std[-i] += \
-                        (rew - self._running_mean[-i]) * (rew - prev_mean)
-
                 self._rewards[env_num][-i].append(0)
                 self._actions[env_num][-i-1].append(
-                    self._meta_action[env_num][-i].flatten())
+                    self.meta_action[env_num][-i].flatten())
 
             # Compute the intrinsic rewards and append them to the list of
             # rewards.
             self._rewards[env_num][-i][-1] += \
                 self.intrinsic_reward_scale / self.meta_period ** (i-1) * \
                 self.intrinsic_reward_fn(
-                    states=obs0,
-                    goals=self._meta_action[env_num][-i].flatten(),
-                    next_states=obs1
-                ) - 1.0 * np.linalg.norm(action)
+                    states=5 * obs0,
+                    goals=5 * self.meta_action[env_num][-i].flatten(),
+                    next_states=5 * obs1
+                ) - 3.0 * np.linalg.norm(action)
 
         # The highest level policy receives the sum of environmental rewards.
         self._rewards[env_num][0][0] += reward
@@ -730,16 +717,6 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         # Add a sample to the replay buffer.
         if len(self._observations[env_num]) == \
                 self.meta_period ** (self.num_levels - 1) or done:
-            # Update the running mean and stds of the highest level policy.
-            if not evaluate:
-                prev_mean = self._running_mean[0]
-                rew = self._rewards[env_num][0][0]
-                self._n[0] += 1
-                self._running_mean[0] += \
-                    (rew - self._running_mean[0]) / self._n[0]
-                self._running_std[0] += \
-                    (rew - self._running_mean[0]) * (rew - prev_mean)
-
             # Add the last observation and context.
             self._observations[env_num].append(obs1)
             self._contexts[env_num].append(context1)
@@ -748,7 +725,7 @@ class GoalConditionedPolicy(ActorCriticPolicy):
             for i in range(self.num_levels - 1):
                 self._actions[env_num][i].append(self.goal_transition_fn(
                     obs0=obs0[self.goal_indices],
-                    goal=self._meta_action[env_num][i],
+                    goal=self.meta_action[env_num][i],
                     obs1=obs1[self.goal_indices]
                 ).flatten())
 

@@ -33,9 +33,9 @@ BASE_ENV_PARAMS = dict(
     stopping_penalty=False,
     # whether to include a regularizing penalty for accelerations by the AVs
     acceleration_penalty=False,
-    # path to the initialized vehicle states. Cannot be set in addition to the
-    # `inflows` term. This feature defines its own inflows.
-    warmup_path=None,
+    # number of observation frames to use. Additional frames are provided from
+    # previous time steps.
+    obs_frames=1,
 )
 
 CLOSED_ENV_PARAMS = BASE_ENV_PARAMS.copy()
@@ -43,12 +43,6 @@ CLOSED_ENV_PARAMS.update(dict(
     # range for the lengths allowed in the network. If set to None, the ring
     # length is not modified from its initial value.
     ring_length=[220, 270],
-    # whether to distribute the automated vehicles evenly among the human
-    # driven vehicles. Otherwise, they are randomly distributed.
-    even_distribution=False,
-    # whether to sort RL vehicles by their initial position. Used to account
-    # for noise brought about by shuffling.
-    sort_vehicles=True,
 ))
 
 OPEN_ENV_PARAMS = BASE_ENV_PARAMS.copy()
@@ -56,9 +50,11 @@ OPEN_ENV_PARAMS.update(dict(
     # range for the inflows allowed in the network. If set to None, the inflows
     # are not modified from their initial value.
     inflows=[1000, 2000],
+    # path to the initialized vehicle states. Cannot be set in addition to the
+    # `inflows` term. This feature defines its own inflows.
+    warmup_path=None,
     # the AV penetration rate, defining the portion of inflow vehicles that
-    # will be automated. If "inflows" or "warmup_path" is set to None, this is
-    # irrelevant.
+    # will be automated. If "inflows" is set to None, this is irrelevant.
     rl_penetration=0.1,
     # maximum number of controllable vehicles in the network
     num_rl=5,
@@ -82,6 +78,8 @@ class AVEnv(Env):
     * stopping_penalty: whether to include a stopping penalty
     * acceleration_penalty: whether to include a regularizing penalty for
       accelerations by the AVs
+    * obs_frames: number of observation frames to use. Additional frames are
+      provided from previous time steps.
 
     States
         The observation consists of the speeds and bumper-to-bumper headways of
@@ -130,15 +128,6 @@ class AVEnv(Env):
             if p not in env_params.additional_params:
                 raise KeyError('Env parameter "{}" not supplied'.format(p))
 
-        # this is stored to be reused during the reset procedure
-        self._network_cls = network.__class__
-        self._network_name = deepcopy(network.orig_name)
-        self._network_net_params = deepcopy(network.net_params)
-        self._network_initial_config = deepcopy(network.initial_config)
-        self._network_traffic_lights = deepcopy(network.traffic_lights)
-        self._network_vehicles = deepcopy(network.vehicles)
-        self._obs_history = []
-
         super(AVEnv, self).__init__(
             env_params=env_params,
             sim_params=sim_params,
@@ -146,25 +135,23 @@ class AVEnv(Env):
             simulator=simulator,
         )
 
+        # this is stored to be reused during the reset procedure
+        self._network_cls = network.__class__
+        self._network_name = deepcopy(network.orig_name)
+        self._network_net_params = deepcopy(network.net_params)
+        self._network_initial_config = deepcopy(network.initial_config)
+        self._network_traffic_lights = deepcopy(network.traffic_lights)
+        self._network_vehicles = deepcopy(network.vehicles)
+
+        # used for visualization: the vehicles behind and after RL vehicles
+        # (ie the observed vehicles) will have a different color
         self.leader = []
         self.follower = []
-        self.num_rl = 1  # deepcopy(self.initial_vehicles.num_rl_vehicles)
-        self._mean_speeds = []
 
-        # Get the paths to all the initial state xml files
-        warmup_path = env_params.additional_params["warmup_path"]
-        if warmup_path is not None:
-            self.warmup_paths = [
-                f for f in os.listdir(warmup_path) if f.endswith(".xml")
-            ]
-            self.warmup_description = defaultdict(list)
-            for record in DictReader(
-                    open(os.path.join(warmup_path, 'description.csv'))):
-                for key, val in record.items():  # or iteritems in Python 2
-                    self.warmup_description[key].append(float(val))
-        else:
-            self.warmup_paths = None
-            self.warmup_description = None
+        self.num_rl = deepcopy(self.initial_vehicles.num_rl_vehicles)
+        self._mean_speeds = []
+        self._obs_history = []
+        self._obs_frames = env_params.additional_params["obs_frames"]
 
         # dynamics controller for controlled RL vehicles. Only relevant if
         # "use_follower_stopper" is set to True.
@@ -210,7 +197,7 @@ class AVEnv(Env):
         return Box(
             low=-float('inf'),
             high=float('inf'),
-            shape=(5 * self.num_rl * 5,),
+            shape=(5 * self._obs_frames * self.num_rl,),
             dtype=np.float32)
 
     def _apply_rl_actions(self, rl_actions):
@@ -284,8 +271,11 @@ class AVEnv(Env):
                 # Reward high system-level average speeds.                    #
                 # =========================================================== #
 
-                reward_scale = 0.1
-                reward += reward_scale * np.mean(vel) ** 2
+                reward_scale = 5e-7
+                avg_speed = np.mean(vel)
+                density = num_vehicles \
+                          / (self._control_range[1] - self._control_range[0])
+                reward += reward_scale * (avg_speed * density * 3600) ** 2
 
                 # =========================================================== #
                 # Penalize stopped RL vehicles.                               #
@@ -313,7 +303,7 @@ class AVEnv(Env):
         self.follower = []
 
         # Initialize a set on empty observations
-        obs = [0 for _ in range(5 * self.num_rl)]
+        obs = [0 for _ in range(self._obs_frames * self.num_rl)]
 
         for i, v_id in enumerate(self.rl_ids()):
             # Add relative observation of each vehicle.
@@ -327,13 +317,13 @@ class AVEnv(Env):
 
         # Add the observation to the observation history to the
         self._obs_history.append(obs)
-        if len(self._obs_history) > 25:
-            self._obs_history = self._obs_history[-25:]
+        if len(self._obs_history) > 5 * self._obs_frames:
+            self._obs_history = self._obs_history[-5 * self._obs_frames:]
 
         # Concatenate the past n samples for a given time delta and return as
         # the final observation.
         obs_t = np.concatenate(self._obs_history[::-5])
-        obs = np.array([0. for _ in range(25 * self.num_rl)])
+        obs = np.array([0. for _ in range(5 * self._obs_frames * self.num_rl)])
         obs[:len(obs_t)] = obs_t
 
         return obs
@@ -399,13 +389,10 @@ class AVClosedEnv(AVEnv):
     * stopping_penalty: whether to include a stopping penalty
     * acceleration_penalty: whether to include a regularizing penalty for
       accelerations by the AVs
-    * num_vehicles: range for the number of vehicles allowed in the network. If
-      set to None, the number of vehicles are is modified from its initial
-      value.
-    * even_distribution: whether to distribute the automated vehicles evenly
-      among the human driven vehicles. Otherwise, they are randomly distributed
-    * sort_vehicles: whether to sort RL vehicles by their initial position.
-      Used to account for noise brought about by shuffling.
+    * obs_frames: number of observation frames to use. Additional frames are
+      provided from previous time steps.
+    * ring_length: range for the lengths allowed in the network. If set to
+      None, the ring length is not modified from its initial value.
     """
 
     def __init__(self, env_params, sim_params, network, simulator='traci'):
@@ -414,21 +401,12 @@ class AVClosedEnv(AVEnv):
             if p not in env_params.additional_params:
                 raise KeyError('Env parameter "{}" not supplied'.format(p))
 
-        assert not (
-                env_params.additional_params["warmup_path"] is not None
-                and env_params.additional_params["ring_length"] is not None), \
-            "Cannot assign a value to both \"warmup_paths\" and " \
-            "\"ring_length\""
-
         super(AVClosedEnv, self).__init__(
             env_params=env_params,
             sim_params=sim_params,
             network=network,
             simulator=simulator,
         )
-
-        # attributes for sorting RL IDs by their initial position.
-        self._sorted_rl_ids = []
 
         # solve for the free flow velocity of the ring
         v_guess = 4
@@ -438,13 +416,6 @@ class AVClosedEnv(AVEnv):
 
         # for storing the distance from the free-flow-speed for a given rollout
         self._percent_v_eq = []
-
-    def rl_ids(self):
-        """See parent class."""
-        if self.env_params.additional_params["sort_vehicles"]:
-            return self._sorted_rl_ids
-        else:
-            return self.k.vehicle.get_rl_ids()
 
     def step(self, rl_actions):
         """See parent class."""
@@ -463,25 +434,13 @@ class AVClosedEnv(AVEnv):
         self._percent_v_eq = []
 
         params = self.env_params.additional_params
-        if params["ring_length"] is not None or self.warmup_paths is not None:
+        if params["ring_length"] is not None:
             # Make sure restart instance is set to True when resetting.
             self.sim_params.restart_instance = True
 
-            if self.warmup_paths is not None:
-                # Choose a random available xml file.
-                xml_file = random.sample(self.warmup_paths, 1)[0]
-                xml_num = int(xml_file.split(".")[0])
-
-                # Update the choice of initial conditions.
-                self.sim_params.load_state = os.path.join(
-                    params["warmup_path"], xml_file)
-
-                # Assign the ring length to match the xml number.
-                length = self.warmup_description["length"][xml_num]
-            else:
-                # Choose the network length randomly.
-                length = random.randint(
-                    params['ring_length'][0], params['ring_length'][1])
+            # Choose the network length randomly.
+            length = random.randint(
+                params['ring_length'][0], params['ring_length'][1])
 
             # Add the ring length to NetParams.
             new_net_params = deepcopy(self._network_net_params)
@@ -507,58 +466,10 @@ class AVClosedEnv(AVEnv):
             print('v_eq:', self._v_eq)
             print('-----------------------')
 
-        self.leader = []
-        self.follower = []
-        _ = super(AVClosedEnv, self).reset()
+        # Perform the reset operation.
+        obs = super(AVClosedEnv, self).reset()
 
-        # Add automated vehicles.
-        if self.warmup_paths is not None:
-            self._add_automated_vehicles()
-
-        # Get the initial positions of the RL vehicles to allow us to sort the
-        # vehicles by this term.
-        def init_pos(veh_id):
-            return self.k.vehicle.get_x_by_id(veh_id)
-
-        # Create a list of the RL IDs sorted by the above term.
-        self._sorted_rl_ids = sorted(self.k.vehicle.get_rl_ids(), key=init_pos)
-
-        # Recompute the initial observation.
-        obs = self.get_state()
-
-        return np.copy(obs)
-
-    def _add_automated_vehicles(self):
-        """Replace a portion of vehicles with automated vehicles."""
-        if self.env_params.additional_params["even_distribution"]:
-            penetration = 0  # FIXME
-
-            # Sort the initial vehicles by their positions.
-            sorted_vehicles = sorted(
-                self.k.vehicle.get_ids(),
-                key=lambda x: self.k.vehicle.get_x_by_id(x))
-
-            # Replace every nth vehicle with an RL vehicle.
-            for i, veh_id in enumerate(sorted_vehicles):
-                self.k.vehicle.set_vehicle_type(veh_id, "human")
-
-                if (i + 1) % int(1 / penetration) == 0:
-                    # Don't add vehicles past the control range.
-                    pos = self.k.vehicle.get_x_by_id(veh_id)
-                    if pos < self._control_range[1]:
-                        self.k.vehicle.set_vehicle_type(veh_id, "rl")
-        else:
-            # Sample a number of vehicles randomly to assign as AVs.
-            av_ids = random.sample(self.k.vehicle.get_ids(), self.num_rl)
-
-            # Replace the vehicle type of the AVs to "rl".
-            for veh_id in av_ids:
-                self.k.vehicle.set_vehicle_type(veh_id, "rl")
-
-            # Make sure vehicle that are not under the AV list are treated as
-            # human-driven vehicles.
-            for veh_id in list(set(self.k.vehicle.get_ids()) - set(av_ids)):
-                self.k.vehicle.set_vehicle_type(veh_id, "human")
+        return obs
 
 
 class AVOpenEnv(AVEnv):
@@ -603,6 +514,8 @@ class AVOpenEnv(AVEnv):
     * stopping_penalty: whether to include a stopping penalty
     * acceleration_penalty: whether to include a regularizing penalty for
       accelerations by the AVs
+    * obs_frames: number of observation frames to use. Additional frames are
+      provided from previous time steps.
     * inflows: range for the inflows allowed in the network. If set to None,
       the inflows are not modified from their initial value.
     * warmup_path: path to the initialized vehicle states. Cannot be set in
@@ -632,6 +545,21 @@ class AVOpenEnv(AVEnv):
             simulator=simulator,
         )
 
+        # Get the paths to all the initial state xml files
+        warmup_path = env_params.additional_params["warmup_path"]
+        if warmup_path is not None:
+            self.warmup_paths = [
+                f for f in os.listdir(warmup_path) if f.endswith(".xml")
+            ]
+            self.warmup_description = defaultdict(list)
+            for record in DictReader(
+                    open(os.path.join(warmup_path, 'description.csv'))):
+                for key, val in record.items():  # or iteritems in Python 2
+                    self.warmup_description[key].append(float(val))
+        else:
+            self.warmup_paths = None
+            self.warmup_description = None
+
         # maximum number of controlled vehicles
         self.num_rl = env_params.additional_params["num_rl"]
 
@@ -643,11 +571,6 @@ class AVOpenEnv(AVEnv):
 
         # names of the rl vehicles past the control range
         self.removed_veh = []
-
-        # used for visualization: the vehicles behind and after RL vehicles
-        # (ie the observed vehicles) will have a different color
-        self.leader = []
-        self.follower = []
 
         # control range, updated to be entire network if not specified
         self._control_range = \

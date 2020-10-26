@@ -32,6 +32,7 @@ from hbaselines.algorithms.rl_algorithm import TD3_PARAMS
 from hbaselines.algorithms.rl_algorithm import SAC_PARAMS
 from hbaselines.algorithms.rl_algorithm import PPO_PARAMS
 from hbaselines.algorithms.rl_algorithm import FEEDFORWARD_PARAMS
+from hbaselines.algorithms.rl_algorithm import MULTIAGENT_PARAMS
 from hbaselines.algorithms.rl_algorithm import GOAL_CONDITIONED_PARAMS
 
 
@@ -72,6 +73,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -167,6 +169,7 @@ class TestTrain(unittest.TestCase):
                 '--n_training', '1',
                 '--total_steps', '2',
                 '--seed', '3',
+                '--log_dir', 'custom_dir',
                 '--log_interval', '4',
                 '--eval_interval', '5',
                 '--save_interval', '6',
@@ -210,6 +213,7 @@ class TestTrain(unittest.TestCase):
             'evaluate': True,
             'gamma': 19.0,
             'initial_exploration_steps': 10000,
+            'log_dir': 'custom_dir',
             'log_interval': 4,
             'meta_update_freq': 13,
             'l2_penalty': 1,
@@ -299,6 +303,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -337,6 +342,7 @@ class TestTrain(unittest.TestCase):
             'tau': TD3_PARAMS['tau'],
             'gamma': TD3_PARAMS['gamma'],
             'cg_weights': GOAL_CONDITIONED_PARAMS['cg_weights'],
+            'cg_delta': GOAL_CONDITIONED_PARAMS['cg_delta'],
             'cooperative_gradients': False,
             'pretrain_ckpt': GOAL_CONDITIONED_PARAMS['pretrain_ckpt'],
             'pretrain_path': GOAL_CONDITIONED_PARAMS['pretrain_path'],
@@ -395,6 +401,7 @@ class TestTrain(unittest.TestCase):
                     'strides': model_params["strides"],
                 },
                 'cg_weights': GOAL_CONDITIONED_PARAMS['cg_weights'],
+                'cg_delta': GOAL_CONDITIONED_PARAMS['cg_delta'],
                 'cooperative_gradients': False,
                 'pretrain_ckpt': GOAL_CONDITIONED_PARAMS['pretrain_ckpt'],
                 'pretrain_path': GOAL_CONDITIONED_PARAMS['pretrain_path'],
@@ -431,6 +438,7 @@ class TestTrain(unittest.TestCase):
                 "--subgoal_testing_rate", "6",
                 "--cooperative_gradients",
                 "--cg_weights", "7",
+                "--cg_delta", "10",
                 "--pretrain_ckpt", "8",
                 "--pretrain_path", "9",
                 "--pretrain_worker",
@@ -446,6 +454,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -484,6 +493,7 @@ class TestTrain(unittest.TestCase):
             'tau': TD3_PARAMS['tau'],
             'gamma': TD3_PARAMS['gamma'],
             'cg_weights': 7,
+            'cg_delta': 10,
             'cooperative_gradients': True,
             'pretrain_ckpt': 8,
             'pretrain_path': "9",
@@ -539,6 +549,7 @@ class TestTrain(unittest.TestCase):
                     'strides': model_params["strides"],
                 },
                 'cg_weights': 7,
+                'cg_delta': 10,
                 'cooperative_gradients': True,
                 'pretrain_ckpt': 8,
                 'pretrain_path': "9",
@@ -567,6 +578,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -606,6 +618,7 @@ class TestTrain(unittest.TestCase):
             'gamma': TD3_PARAMS['gamma'],
             'shared': False,
             'maddpg': False,
+            'n_agents': MULTIAGENT_PARAMS["n_agents"],
         })
 
         hp = get_hyperparameters(args, TD3MultiFeedForwardPolicy)
@@ -650,6 +663,7 @@ class TestTrain(unittest.TestCase):
                 },
                 'shared': False,
                 'maddpg': False,
+                'n_agents': MULTIAGENT_PARAMS["n_agents"],
             }
         })
 
@@ -659,7 +673,7 @@ class TestTrain(unittest.TestCase):
 
         args = parse_options(
             "", "",
-            args=["AntMaze", "--shared", "--maddpg"],
+            args=["AntMaze", "--shared", "--maddpg", "--n_agents", "2"],
             multiagent=True,
             hierarchical=False,
         )
@@ -671,6 +685,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -710,6 +725,7 @@ class TestTrain(unittest.TestCase):
             'gamma': TD3_PARAMS['gamma'],
             'shared': True,
             'maddpg': True,
+            'n_agents': 2,
         })
 
         hp = get_hyperparameters(args, TD3MultiFeedForwardPolicy)
@@ -754,6 +770,7 @@ class TestTrain(unittest.TestCase):
                 },
                 'shared': True,
                 'maddpg': True,
+                'n_agents': 2,
             }
         })
 
@@ -770,6 +787,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -808,6 +826,7 @@ class TestTrain(unittest.TestCase):
             'tau': TD3_PARAMS['tau'],
             'gamma': TD3_PARAMS['gamma'],
             'cg_weights': GOAL_CONDITIONED_PARAMS['cg_weights'],
+            'cg_delta': GOAL_CONDITIONED_PARAMS['cg_delta'],
             'cooperative_gradients': False,
             'pretrain_ckpt': GOAL_CONDITIONED_PARAMS['pretrain_ckpt'],
             'pretrain_path': GOAL_CONDITIONED_PARAMS['pretrain_path'],
@@ -825,6 +844,7 @@ class TestTrain(unittest.TestCase):
                 'subgoal_testing_rate'],
             'shared': False,
             'maddpg': False,
+            'n_agents': MULTIAGENT_PARAMS["n_agents"],
         })
 
         hp = get_hyperparameters(args, TD3MultiFeedForwardPolicy)
@@ -869,6 +889,7 @@ class TestTrain(unittest.TestCase):
                 },
                 'shared': False,
                 'maddpg': False,
+                'n_agents': MULTIAGENT_PARAMS["n_agents"],
             }
         })
 
@@ -890,8 +911,10 @@ class TestTrain(unittest.TestCase):
                 "--subgoal_testing_rate", "6",
                 "--cooperative_gradients",
                 "--cg_weights", "7",
+                "--cg_delta", "9",
                 "--shared",
                 "--maddpg",
+                "--n_agents", "8",
             ],
             multiagent=True,
             hierarchical=True,
@@ -904,6 +927,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -942,6 +966,7 @@ class TestTrain(unittest.TestCase):
             'tau': TD3_PARAMS['tau'],
             'gamma': TD3_PARAMS['gamma'],
             'cg_weights': 7,
+            'cg_delta': 9,
             'cooperative_gradients': True,
             'pretrain_ckpt': GOAL_CONDITIONED_PARAMS['pretrain_ckpt'],
             'pretrain_path': GOAL_CONDITIONED_PARAMS['pretrain_path'],
@@ -956,6 +981,7 @@ class TestTrain(unittest.TestCase):
             'subgoal_testing_rate': 6,
             'shared': True,
             'maddpg': True,
+            'n_agents': 8,
         })
 
         hp = get_hyperparameters(args, TD3MultiGoalConditionedPolicy)
@@ -999,6 +1025,7 @@ class TestTrain(unittest.TestCase):
                     'strides': model_params["strides"],
                 },
                 'cg_weights': 7,
+                'cg_delta': 9,
                 'cooperative_gradients': True,
                 'pretrain_ckpt': GOAL_CONDITIONED_PARAMS['pretrain_ckpt'],
                 'pretrain_path': GOAL_CONDITIONED_PARAMS['pretrain_path'],
@@ -1013,6 +1040,7 @@ class TestTrain(unittest.TestCase):
                 'subgoal_testing_rate': 6,
                 'shared': True,
                 'maddpg': True,
+                'n_agents': 8,
             }
         })
 
@@ -1051,6 +1079,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -1143,6 +1172,7 @@ class TestTrain(unittest.TestCase):
                 '--n_training', '1',
                 '--total_steps', '2',
                 '--seed', '3',
+                '--log_dir', 'custom_dir',
                 '--log_interval', '4',
                 '--eval_interval', '5',
                 '--save_interval', '6',
@@ -1183,6 +1213,7 @@ class TestTrain(unittest.TestCase):
             'evaluate': True,
             'gamma': 19.0,
             'initial_exploration_steps': 10000,
+            'log_dir': 'custom_dir',
             'log_interval': 4,
             'meta_update_freq': 13,
             'l2_penalty': FEEDFORWARD_PARAMS["l2_penalty"],
@@ -1283,6 +1314,7 @@ class TestTrain(unittest.TestCase):
             'n_training': 1,
             'total_steps': 1000000,
             'seed': 1,
+            'log_dir': None,
             'log_interval': 2000,
             'eval_interval': 50000,
             'save_interval': 50000,
@@ -1379,6 +1411,7 @@ class TestTrain(unittest.TestCase):
                 '--n_training', '1',
                 '--total_steps', '2',
                 '--seed', '3',
+                '--log_dir', 'custom_dir',
                 '--log_interval', '4',
                 '--eval_interval', '5',
                 '--save_interval', '6',
@@ -1416,6 +1449,7 @@ class TestTrain(unittest.TestCase):
             'eval_interval': 5,
             'evaluate': True,
             'initial_exploration_steps': 10000,
+            'log_dir': 'custom_dir',
             'log_interval': 4,
             'meta_update_freq': 13,
             'model_params:layers': [22, 23],
@@ -1587,42 +1621,10 @@ class TestEnvUtil(unittest.TestCase):
         test_space(
             ac_space,
             expected_min=np.array([0 for _ in range(5)]),
-            expected_max=np.array([20 for _ in range(5)]),
+            expected_max=np.array([10 for _ in range(5)]),
             expected_size=5,
         )
         ac_space = get_meta_ac_space(env_name="ring-v0", **rel_params)
-        test_space(
-            ac_space,
-            expected_min=np.array([-5 for _ in range(5)]),
-            expected_max=np.array([5 for _ in range(5)]),
-            expected_size=5,
-        )
-
-        # test for ring-v1
-        ac_space = get_meta_ac_space(env_name="ring-v1", **params)
-        test_space(
-            ac_space,
-            expected_min=np.array([0 for _ in range(5)]),
-            expected_max=np.array([20 for _ in range(5)]),
-            expected_size=5,
-        )
-        ac_space = get_meta_ac_space(env_name="ring-v1", **rel_params)
-        test_space(
-            ac_space,
-            expected_min=np.array([-5 for _ in range(5)]),
-            expected_max=np.array([5 for _ in range(5)]),
-            expected_size=5,
-        )
-
-        # test for ring-v2
-        ac_space = get_meta_ac_space(env_name="ring-v2", **params)
-        test_space(
-            ac_space,
-            expected_min=np.array([0 for _ in range(5)]),
-            expected_max=np.array([20 for _ in range(5)]),
-            expected_size=5,
-        )
-        ac_space = get_meta_ac_space(env_name="ring-v2", **rel_params)
         test_space(
             ac_space,
             expected_min=np.array([-5 for _ in range(5)]),
@@ -1884,19 +1886,7 @@ class TestEnvUtil(unittest.TestCase):
         # test for ring-v0
         self.assertListEqual(
             get_state_indices(env_name="ring-v0", **params),
-            [0, 5, 10, 15, 20]
-        )
-
-        # test for ring-v1
-        self.assertListEqual(
-            get_state_indices(env_name="ring-v1", **params),
-            [0, 5, 10, 15, 20]
-        )
-
-        # test for ring-v2
-        self.assertListEqual(
-            get_state_indices(env_name="ring-v2", **params),
-            [0, 5, 10, 15, 20]
+            [0]
         )
 
         # test for ring-imitation
