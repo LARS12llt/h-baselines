@@ -696,7 +696,7 @@ class GoalConditionedPolicy(ActorCriticPolicy):
                     states=5 * obs0,
                     goals=5 * self.meta_action[env_num][-i].flatten(),
                     next_states=5 * obs1
-                ) - 3.0 * np.linalg.norm(action)
+                ) - 1.0 * np.linalg.norm(action)
 
         # The highest level policy receives the sum of environmental rewards.
         self._rewards[env_num][0][0] += reward
