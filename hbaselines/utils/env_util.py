@@ -15,8 +15,8 @@ from gym.spaces import Box
 # from hbaselines.envs.efficient_hrl.envs import AntPush
 # from hbaselines.envs.efficient_hrl.envs import AntFourRooms
 # from hbaselines.envs.hac.envs import UR5, Pendulum
-# import hbaselines.config as hbaselines_config
-#
+import hbaselines.config as hbaselines_config
+
 # try:
 #     from hbaselines.envs.snn4hrl.envs import AntGatherEnv
 #     from hbaselines.envs.snn4hrl.envs import SnakeGatherEnv
