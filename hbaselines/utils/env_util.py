@@ -6,23 +6,6 @@ import gym
 from copy import deepcopy
 from gym.spaces import Box
 
-from hbaselines.envs.deeploco.envs import BipedalSoccer
-from hbaselines.envs.deeploco.envs import BipedalObstacles
-from hbaselines.envs.efficient_hrl.envs import AntMaze
-from hbaselines.envs.efficient_hrl.envs import HumanoidMaze
-from hbaselines.envs.efficient_hrl.envs import ImageAntMaze
-from hbaselines.envs.efficient_hrl.envs import AntFall
-from hbaselines.envs.efficient_hrl.envs import AntPush
-from hbaselines.envs.efficient_hrl.envs import AntFourRooms
-from hbaselines.envs.hac.envs import UR5, Pendulum
-
-try:
-    from hbaselines.envs.snn4hrl.envs import AntGatherEnv
-    from hbaselines.envs.snn4hrl.envs import SnakeGatherEnv
-    from hbaselines.envs.snn4hrl.envs import SwimmerGatherEnv
-except (ImportError, ModuleNotFoundError):
-    pass
-
 try:
     import flow.config as config
     from hbaselines.envs.mixed_autonomy import FlowEnv
