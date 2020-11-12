@@ -173,7 +173,7 @@ class RingEnv(gym.Env):
         self.b = 2.0
         self.delta = 4
         self.s0 = 2
-        self.noise = 0.0
+        self.noise = 0.2
 
         # failsafe parameters
         self.decel = 4.5
@@ -645,23 +645,27 @@ class RingSingleAgentEnv(RingEnv):
         return Box(
             low=-float('inf'),
             high=float('inf'),
-            shape=(15 * self.num_rl,),
+            shape=(25 * self.num_rl,),
             dtype=np.float32)
 
     def get_state(self):
         """See parent class."""
         # Initialize a set on empty observations.
-        obs = np.array([0. for _ in range(3 * self.num_rl)])
+        obs = np.array([0. for _ in range(5 * self.num_rl)])
 
         for i, veh_id in enumerate(self.rl_ids):
             # Add relative observation of each vehicle.
-            obs[3*i: 3*(i+1)] = [
+            obs[5*i: 5*(i+1)] = [
                 # ego speed
                 self.speeds[veh_id] / MAX_SPEED,
                 # lead speed
                 self.speeds[(veh_id + 1) % self.num_vehicles] / MAX_SPEED,
                 # lead gap
                 min(self.headways[veh_id] / MAX_HEADWAY, 5.0),
+                # follower speed
+                self.speeds[(veh_id - 1) % self.num_vehicles] / MAX_SPEED,
+                # lead gap
+                min(self.headways[(veh_id - 1) % self.num_vehicles] / MAX_HEADWAY, 5.0),
             ]
 
         # Add the observation to the observation history to the
@@ -672,7 +676,7 @@ class RingSingleAgentEnv(RingEnv):
         # Concatenate the past n samples for a given time delta and return as
         # the final observation.
         obs_t = np.concatenate(self._obs_history[::-5])
-        obs = np.array([0. for _ in range(15 * self.num_rl)])
+        obs = np.array([0. for _ in range(25 * self.num_rl)])
         obs[:len(obs_t)] = obs_t
 
         return obs
@@ -680,7 +684,7 @@ class RingSingleAgentEnv(RingEnv):
     def compute_reward(self, action):
         """See parent class."""
         reward_scale = 0.1  # 0.1  # 0.001
-        reward = reward_scale * np.mean(self.speeds[self.rl_ids]) ** 2
+        reward = reward_scale * np.mean(self.speeds) ** 2
         # reward_scale = 0.1
         # v_des = self._v_eq
         # reward = reward_scale * (
