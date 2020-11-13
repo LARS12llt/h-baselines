@@ -344,7 +344,7 @@ class RingEnv(gym.Env):
         if isinstance(accel, dict):
             accel = [accel[key][0] for key in self.rl_ids]
 
-        accel = np.array(accel) / 10.0
+        accel = np.array(accel) / 2.0
 
         # Redefine if below a speed threshold so that all actions result in
         # non-negative desired speeds.
