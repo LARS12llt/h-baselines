@@ -379,34 +379,25 @@ class GoalConditionedPolicy(ActorCriticPolicy):
             num_levels=num_levels
         )
 
+        # time since the most recent highest level meta-period started
+        self._t_start = [0 for _ in range(num_envs)]
+
+        # temporary placeholder for samples passed to the replay buffer
+        self._sample_data = [[
+            [{"action": [],
+              "observation": [],
+              "next_observation": [],
+              "context": [],
+              "next_context": [],
+              "reward": 0,
+              "done": False}
+             for _ in range(self._level_period(0) // self._level_period(i))]
+            for i in range(num_levels)
+        ] for _ in range(num_envs)]
+
         # current action by the meta-level policies
         self.meta_action = [[None for _ in range(num_levels - 1)]
                             for _ in range(num_envs)]
-
-        # a list of all the actions performed by each level in the hierarchy,
-        # ordered from highest to lowest level policy. A separate element is
-        # used for each environment.
-        self._actions = [[[] for _ in range(self.num_levels)]
-                         for _ in range(num_envs)]
-
-        # a list of the rewards (intrinsic or other) experienced by every level
-        # in the hierarchy, ordered from highest to lowest level policy. A
-        # separate element is used for each environment.
-        self._rewards = [[[0]] + [[] for _ in range(self.num_levels - 1)]
-                         for _ in range(num_envs)]
-
-        # a list of observations that stretch as long as the dilated horizon
-        # chosen for the highest level policy. A separate element is used for
-        # each environment.
-        self._observations = [[] for _ in range(num_envs)]
-
-        # the first and last contextual term. A separate element is used for
-        # each environment.
-        self._contexts = [[] for _ in range(num_envs)]
-
-        # a list of done masks at every time step. A separate element is used
-        # for each environment.
-        self._dones = [[] for _ in range(num_envs)]
 
         # Collect the state indices for the intrinsic rewards.
         self.goal_indices = get_state_indices(ob_space, env_name)
@@ -653,13 +644,11 @@ class GoalConditionedPolicy(ActorCriticPolicy):
     def get_action(self, obs, context, apply_noise, random_actions, env_num=0):
         """See parent class."""
         self._t += 1
-        num_levels = self.num_levels
 
         # Loop through the policies in the hierarchy.
         for i in range(self.num_levels - 1):
             if self._update_meta(i, env_num):
-                if self.pretrain_worker and \
-                        self._t <= 2e5 * (num_levels-i-1) / (num_levels-1):
+                if self.pretrain_worker and self._t <= 250000:
                     # Sample goals randomly when performing pre-training.
                     self.meta_action[env_num][i] = np.array([
                         self.policy[i].ac_space.sample()])
@@ -671,15 +660,6 @@ class GoalConditionedPolicy(ActorCriticPolicy):
                     # policy if the time period requires is.
                     self.meta_action[env_num][i] = self.policy[i].get_action(
                         obs, context_i, apply_noise, random_actions)
-            else:
-                # Update the meta-action in accordance with a fixed transition
-                # function.
-                self.meta_action[env_num][i] = self.goal_transition_fn(
-                    obs0=np.array(
-                        [self._observations[env_num][-1][self.goal_indices]]),
-                    goal=self.meta_action[env_num][i],
-                    obs1=obs[:, self.goal_indices]
-                )
 
         # Return the action to be performed within the environment (i.e. the
         # action by the lowest level policy).
@@ -694,110 +674,125 @@ class GoalConditionedPolicy(ActorCriticPolicy):
     def store_transition(self, obs0, context0, action, reward, obs1, context1,
                          done, is_final_step, env_num=0, evaluate=False):
         """See parent class."""
-        # the time since the most recent sample began collecting step samples
-        t_start = len(self._observations[env_num])
+        self._t_start[env_num] += 1
 
-        # Flatten the observations.
-        obs0 = obs0.flatten()
-        obs1 = obs1.flatten()
+        # Update data to the highest level policy.
+        self._sample_data[env_num][0][0]["reward"] += reward
+        if self._t_start[env_num] == 1:
+            self._sample_data[env_num][0][0]["observation"] = obs0
+            self._sample_data[env_num][0][0]["context"] = \
+                context0 if context0 is None else context0.flatten()
+            self._sample_data[env_num][0][0]["action"] = \
+                deepcopy(self.meta_action[env_num][0].flatten())
+        if self._t_start[env_num] == self._level_period(0) or done:
+            self._sample_data[env_num][0][0]["next_observation"] = obs1
+            self._sample_data[env_num][0][0]["next_context"] = \
+                context1 if context1 is None else context1.flatten()
+            self._sample_data[env_num][0][0]["done"] = done
 
+        # Loop through the mid-level policies, from highest to lowest.
         for i in range(1, self.num_levels):
-            # Actions and intrinsic rewards for the high-level policies are
-            # only updated when the action is recomputed by the graph.
-            if self._update_meta(self.num_levels - i, env_num):
-                self._rewards[env_num][-i].append(0)
-                self._actions[env_num][-i-1].append(
-                    self.meta_action[env_num][-i].flatten())
+            # Add the starting observation/context/action when a sub-policy
+            # begins performing action.
+            if self._update_meta(i, env_num, tm1=True):
+                t_step = (self._t_start[env_num] - 1) // self._level_period(i)
+                self._sample_data[env_num][i][t_step]["observation"] = obs0
+                self._sample_data[env_num][i][t_step]["context"] = \
+                    deepcopy(self.meta_action[env_num][i - 1].flatten())
+                if i == self.num_levels - 1:
+                    # action of the lowest level policy is the env action
+                    self._sample_data[env_num][i][t_step]["action"] = action
+                else:
+                    self._sample_data[env_num][i][t_step]["action"] = \
+                        deepcopy(self.meta_action[env_num][i].flatten())
 
-            # Compute the intrinsic rewards and append them to the list of
-            # rewards.
-            self._rewards[env_num][-i][-1] += \
-                self.intrinsic_reward_scale[-i] * \
-                self.intrinsic_reward_fn(
-                    states=obs0,
-                    goals=self.meta_action[env_num][-i].flatten(),
-                    next_states=obs1
-                )
-
-        # The highest level policy receives the sum of environmental rewards.
-        self._rewards[env_num][0][0] += reward
-
-        # The lowest level policy's actions are received from the algorithm.
-        self._actions[env_num][-1].append(action)
-
-        # Add the environmental observations and contextual terms to their
-        # respective lists.
-        self._observations[env_num].append(obs0)
-        if t_start == 0:
-            self._contexts[env_num].append(context0)
-
-        # Modify the done mask in accordance with the TD3 algorithm. Done masks
-        # that correspond to the final step are set to False.
-        self._dones[env_num].append(done and not is_final_step)
-
-        # Add a sample to the replay buffer.
-        if self._update_meta(0, env_num) or done:
-            # Add the last observation and context.
-            self._observations[env_num].append(obs1)
-            self._contexts[env_num].append(context1)
-
-            # Compute the current state goals to add to the final observation.
-            for i in range(self.num_levels - 1):
-                self._actions[env_num][i].append(self.goal_transition_fn(
-                    obs0=obs0[self.goal_indices],
-                    goal=self.meta_action[env_num][i],
-                    obs1=obs1[self.goal_indices]
-                ).flatten())
-
-            # Avoid storing samples when performing evaluations.
-            if not evaluate:
-                if not self.hindsight \
-                        or random.random() < self.subgoal_testing_rate:
-                    # Store a sample in the replay buffer.
-                    self.replay_buffer.add(
-                        obs_t=self._observations[env_num],
-                        context_t=self._contexts[env_num],
-                        action_t=self._actions[env_num],
-                        reward_t=self._rewards[env_num],
-                        done_t=self._dones[env_num],
+            # Add the final observation/context/action when a sub-policy has
+            # completed its period.
+            if self._update_meta(i, env_num) or done:
+                t_step = self._t_start[env_num] // self._level_period(i) - 1
+                self._sample_data[env_num][i][t_step]["next_observation"] = \
+                    obs1
+                self._sample_data[env_num][i][t_step]["next_context"] = \
+                    self.goal_transition_fn(
+                        obs0=obs0[self.goal_indices],
+                        goal=self.meta_action[env_num][-1].flatten(),
+                        obs1=obs1[self.goal_indices]
+                    ).flatten()
+                self._sample_data[env_num][i][t_step]["reward"] = \
+                    self.intrinsic_reward_scale[i - 1] * \
+                    self.intrinsic_reward_fn(
+                        states=self._sample_data[env_num][i][t_step][
+                            "observation"],
+                        goals=np.array(
+                            self._sample_data[env_num][i][t_step]["context"]),
+                        next_states=obs1,
                     )
+                self._sample_data[env_num][i][t_step]["done"] = False  # FIXME
 
-                if self.hindsight:
-                    # Some temporary attributes.
-                    worker_obses = [
-                        self._get_obs(self._observations[env_num][i],
-                                      self._actions[env_num][0][i], 0)
-                        for i in range(len(self._observations[env_num]))]
-                    intrinsic_rewards = self._rewards[env_num][-1]
+        # # Update data to the lowest level policy.
+        # t_step = self._t_start[env_num] - 1
+        # self._sample_data[env_num][-1][t_step]["observation"] = obs0
+        # self._sample_data[env_num][-1][t_step]["context"] = \
+        #     self.meta_action[env_num][-1].flatten()
+        # self._sample_data[env_num][-1][t_step]["action"] = action
+        # self._sample_data[env_num][-1][t_step]["reward"] = \
+        #     self.intrinsic_reward_scale[-1] * self.intrinsic_reward_fn(
+        #         states=obs0,
+        #         goals=self.meta_action[env_num][-1].flatten(),
+        #         next_states=obs1,
+        #     )
+        # self._sample_data[env_num][-1][t_step]["next_observation"] = obs1
+        # self._sample_data[env_num][-1][t_step]["next_context"] = \
+        #     self.goal_transition_fn(
+        #         obs0=obs0[self.goal_indices],
+        #         goal=self.meta_action[env_num][-1].flatten(),
+        #         obs1=obs1[self.goal_indices],
+        #     ).flatten()
+        # self._sample_data[env_num][-1][t_step]["done"] = False  # FIXME
 
-                    # Implement hindsight action and goal transitions.
-                    goal, rewards = self._hindsight_actions_goals(
-                        initial_observations=worker_obses,
-                        initial_rewards=intrinsic_rewards
-                    )
-                    new_actions = deepcopy(self._actions[env_num])
-                    new_actions[0] = goal
-                    new_rewards = deepcopy(self._rewards[env_num])
-                    new_rewards[-1] = rewards
+        # Update the meta-action in accordance with a fixed transition
+        # function.
+        for i in range(self.num_levels - 1):
+            self.meta_action[env_num][i] = self.goal_transition_fn(
+                obs0=obs0[self.goal_indices],
+                goal=self.meta_action[env_num][i],
+                obs1=obs1[self.goal_indices]
+            )
 
-                    # Store the hindsight sample in the replay buffer.
-                    self.replay_buffer.add(
-                        obs_t=self._observations[env_num],
-                        context_t=self._contexts[env_num],
-                        action_t=new_actions,
-                        reward_t=new_rewards,
-                        done_t=self._dones[env_num],
-                    )
+        if self._t_start[env_num] == self._level_period(0) or done:
+            # Save the sample once the highest level meta period is complete.
+            self.replay_buffer.add(deepcopy(self._sample_data[env_num]))
 
             # Clear the memory that has been stored in the replay buffer.
             self.clear_memory(env_num)
 
-    def _update_meta(self, level, env_num):
+    def _update_meta(self, level, env_num, tm1=False):
         """Determine whether a meta-policy should update its action.
 
-        This is done by checking the length of the observation lists that are
-        passed to the replay buffer, which are cleared whenever the highest
-        level meta-period has been met or the environment has been reset.
+        Parameters
+        ----------
+        level : int
+            the level of the sub-policy
+        env_num : int
+            the environment number. Used to handle situations when multiple
+            parallel environments are being used.
+        tm1 : bool
+            decrement the start time by one. Used to check if the meta action
+            was updated in the previous step.
+
+        Returns
+        -------
+        bool
+            True if the action should be updated by the meta-policy at the
+            given level
+        """
+        # the time since the most recent sample began collecting step samples
+        t_start = self._t_start[env_num] - (1 if tm1 else 0)
+
+        return t_start % self._level_period(level) == 0
+
+    def _level_period(self, level):
+        """Return the meta period of the given level.
 
         If the meta period is defined as a list, the period of level i (indexed
         from highest to lowest) is equal to the multiple of the elements in the
@@ -806,41 +801,36 @@ class GoalConditionedPolicy(ActorCriticPolicy):
         Parameters
         ----------
         level : int
-            the level of the policy
-        env_num : int
-            the environment number. Used to handle situations when multiple
-            parallel environments are being used.
+            the level of the sub-policy
 
         Returns
         -------
-        bool
-            True if the action should be updated by the meta-policy at the
-            given level
+        int
+            the meta period of the given level
         """
-        # In the case of passing the lowest level policy, return True (always
-        # perform an action).
         if level == self.num_levels - 1:
-            return True
-
-        # the time since the most recent sample began collecting step samples
-        t_start = len(self._observations[env_num])
-
-        # meta-action period of the given level
-        if isinstance(self.meta_period, int):
+            level_period = 1
+        elif isinstance(self.meta_period, int):
             level_period = self.meta_period ** (self.num_levels - level - 1)
         else:
             level_period = reduce((lambda x, y: x*y), self.meta_period[level:])
 
-        return t_start % level_period == 0
+        return level_period
 
     def clear_memory(self, env_num):
         """Clear internal memory that is used by the replay buffer."""
-        self._actions[env_num] = [[] for _ in range(self.num_levels)]
-        self._rewards[env_num] = \
-            [[0]] + [[] for _ in range(self.num_levels - 1)]
-        self._observations[env_num] = []
-        self._contexts[env_num] = []
-        self._dones[env_num] = []
+        self._t_start[env_num] = 0
+        self._sample_data[env_num] = [
+            [{"action": [],
+              "observation": [],
+              "next_observation": [],
+              "context": [],
+              "next_context": [],
+              "reward": 0,
+              "done": False}
+             for _ in range(self._level_period(0) // self._level_period(i))]
+            for i in range(self.num_levels)
+        ]
 
     def get_td_map(self):
         """See parent class."""

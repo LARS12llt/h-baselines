@@ -1,6 +1,7 @@
 """Script containing the HierReplayBuffer object."""
 import numpy as np
 import random
+import math
 from functools import reduce
 
 
@@ -74,11 +75,7 @@ class HierReplayBuffer(object):
         self._size = 0
         self._current_idx = 0
         self._next_idx = 0
-        self._obs_t = [[] for _ in range(buffer_size)]
-        self._context_t = [[] for _ in range(buffer_size)]
-        self._action_t = [[] for _ in range(buffer_size)]
-        self._reward_t = [[] for _ in range(buffer_size)]
-        self._done_t = [[] for _ in range(buffer_size)]
+        self._sample_t = [[] for _ in range(buffer_size)]
 
     def __len__(self):
         """Return the number of elements stored."""
@@ -138,27 +135,15 @@ class HierReplayBuffer(object):
         """
         return len(self) == self.buffer_size
 
-    def add(self, obs_t, context_t, action_t, reward_t, done_t):
+    def add(self, sample):
         """Add a new transition to the buffer.
 
         Parameters
         ----------
-        obs_t : array_like
-            the list of environment observations
-        action_t : array_like
-            a list of actions performed by every policy in the hierarchy
-        context_t : array_like
-            the first and last context from the environment for the sample
-        reward_t : list of float
-            the list of of rewards experienced by every policy in the hierarchy
-        done_t : list of float or list of bool
-            a list of environment done masks
+        sample : TODO
+            TODO
         """
-        self._obs_t[self._next_idx] = obs_t
-        self._context_t[self._next_idx] = context_t
-        self._action_t[self._next_idx] = action_t
-        self._reward_t[self._next_idx] = reward_t
-        self._done_t[self._next_idx] = done_t
+        self._sample_t[self._next_idx] = sample
 
         # Increment the next index and size terms
         self._current_idx = self._next_idx
@@ -332,84 +317,29 @@ class HierReplayBuffer(object):
 
         for k, indx in enumerate(idxes):
             # Extract the elements of the sample.
-            candidate_obs = self._obs_t[indx]
-            candidate_context = self._context_t[indx]
-            candidate_action = self._action_t[indx]
-            candidate_reward = self._reward_t[indx]
-            candidate_done = self._done_t[indx]
+            candidate_sample = self._sample_t[indx]
 
-            # Collect the sample information for the highest level policy. This
-            # will be the first or last element in the list, depended on if the
-            # element represents the start of end of a sample (e.g. next_obs).
-            if 0 in collect_levels:
-                obses[0].append(candidate_obs[0])
-                contexts[0].append(candidate_context[0])
-                actions[0].append(candidate_action[0][0])
-                next_obses[0].append(candidate_obs[-1])
-                next_contexts[0].append(candidate_context[-1])
-                rewards[0].append(candidate_reward[0][0])
-                dones[0].append(candidate_done[-1])
-
-            # Choose a subsample taking a specific point in time.
-            total_time = len(candidate_obs) - 1
-            sample_time = int(random.random() * (total_time - 1))
+            total_steps = len([None for sample in candidate_sample[-1]
+                               if len(sample["observation"]) > 0])
+            step = random.randint(0, total_steps - 1)
 
             # Collect samples for each level.
-            for i in reversed(range(1, num_levels)):
-                # Compute the level number, with zero corresponding to the
-                # lowest (worker) policy.
-                level_num = num_levels - i - 1
-
-                # meta-action period of the given level
-                if level_num == 0:
-                    level_period = 1
-                elif isinstance(meta_period, int):
-                    level_period = meta_period ** level_num
-                else:
-                    level_period = reduce(
-                        (lambda x, y: x * y), meta_period[-level_num:])
-
+            for i in reversed(range(num_levels)):
                 if i in collect_levels:
-                    obses[i].append(candidate_obs[sample_time])
-                    dones[i].append(candidate_done[sample_time])
-
-                    indx_next_obs = min(sample_time + level_period, total_time)
-                    next_obses[i].append(candidate_obs[indx_next_obs])
-
-                    indx_context = int(sample_time / level_period)
-                    contexts[i].append(candidate_action[i - 1][indx_context])
+                    obses[i].append(candidate_sample[i][step]["observation"])
+                    contexts[i].append(candidate_sample[i][step]["context"])
+                    actions[i].append(candidate_sample[i][step]["action"])
+                    next_obses[i].append(
+                        candidate_sample[i][step]["next_observation"])
                     next_contexts[i].append(
-                        candidate_action[i - 1][indx_context + 1])
+                        candidate_sample[i][step]["next_context"])
+                    rewards[i].append(candidate_sample[i][step]["reward"])
+                    dones[i].append(candidate_sample[i][step]["done"])
 
-                    if level_num in [0, 1]:
-                        indx_actions = sample_time
-                    elif isinstance(meta_period, int):
-                        indx_actions = int(
-                            sample_time / meta_period ** level_num - 1)
-                    else:
-                        indx_actions = int(sample_time / reduce(
-                            (lambda x, y: x * y), meta_period[-level_num+1:]))
-                    actions[i].append(candidate_action[i][indx_actions])
-
-                    indx_rewards = indx_context
-                    rewards[i].append(candidate_reward[i][indx_rewards])
-
-                # Update the sample time to match the start of the meta period
-                # for the next higher-level.
-                if isinstance(meta_period, int):
-                    sample_time -= sample_time % meta_period ** (num_levels-i)
+                if isinstance(meta_period, list):
+                    step = step // meta_period[i - 1]
                 else:
-                    sample_time -= sample_time % reduce(
-                        (lambda x, y: x * y), meta_period[-level_num-1:])
-
-            # TODO: only works for two level hierarchies.
-            if with_additional:
-                for j in range(len(candidate_obs)):
-                    additional["worker_obses"][k, :, j] = self._get_obs(
-                        candidate_obs[j], candidate_action[0][j], 0)
-                for j in range(len(candidate_action[-1])):
-                    additional["worker_actions"][k, :, j] = \
-                        candidate_action[-1][j]
+                    step = step // meta_period
 
         # Convert everything to an array.
         for i in collect_levels:
