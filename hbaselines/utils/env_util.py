@@ -434,7 +434,7 @@ ENV_ATTRIBUTES = {
             dtype=np.float32
         ),
         "state_indices": lambda multiagent: [
-            5 * i for i in range(1 if multiagent else 5)],
+            25 * i for i in range(1 if multiagent else 5)],
         "env": lambda evaluate, render, n_levels, multiagent, shared, maddpg:
         FlowEnv(
             flow_params=merge(
@@ -458,7 +458,7 @@ ENV_ATTRIBUTES = {
             dtype=np.float32
         ),
         "state_indices": lambda multiagent: [
-            5 * i for i in range(1 if multiagent else 13)],
+            25 * i for i in range(1 if multiagent else 13)],
         "env": lambda evaluate, render, n_levels, multiagent, shared, maddpg:
         FlowEnv(
             flow_params=merge(
@@ -482,7 +482,7 @@ ENV_ATTRIBUTES = {
             dtype=np.float32
         ),
         "state_indices": lambda multiagent: [
-            5 * i for i in range(1 if multiagent else 17)],
+            25 * i for i in range(1 if multiagent else 17)],
         "env": lambda evaluate, render, n_levels, multiagent, shared, maddpg:
         FlowEnv(
             flow_params=merge(
@@ -506,7 +506,7 @@ ENV_ATTRIBUTES = {
             dtype=np.float32
         ),
         "state_indices": lambda multiagent: [
-            5 * i for i in range(1 if multiagent else 10)],
+            25 * i for i in range(1 if multiagent else 10)],
         "env": lambda evaluate, render, n_levels, multiagent, shared, maddpg:
         FlowEnv(
             flow_params=highway(
@@ -531,7 +531,7 @@ ENV_ATTRIBUTES = {
             dtype=np.float32
         ),
         "state_indices": lambda multiagent: [
-            5 * i for i in range(1 if multiagent else 10)],
+            25 * i for i in range(1 if multiagent else 10)],
         "env": lambda evaluate, render, n_levels, multiagent, shared, maddpg:
         FlowEnv(
             flow_params=highway(
@@ -552,11 +552,11 @@ ENV_ATTRIBUTES = {
         "meta_ac_space": lambda relative_goals, multiagent: Box(
             low=-5 if relative_goals else 0,
             high=5 if relative_goals else 20,
-            shape=(1 if multiagent else 10,),
+            shape=(1 if multiagent else 5,),
             dtype=np.float32
         ),
         "state_indices": lambda multiagent: [
-            5 * i for i in range(1 if multiagent else 10)],
+            25 * i for i in range(1 if multiagent else 5)],
         "env": lambda evaluate, render, n_levels, multiagent, shared, maddpg:
         FlowEnv(
             flow_params=highway(

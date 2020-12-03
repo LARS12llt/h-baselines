@@ -262,7 +262,8 @@ class AVEnv(Env):
                 # =========================================================== #
 
                 reward_scale = 0.1
-                reward = reward_scale * np.mean(vel) ** 2
+                reward = reward_scale * np.mean(
+                    self.k.vehicle.get_speed(self.rl_ids())) ** 2
 
                 # =========================================================== #
                 # Penalize stopped RL vehicles.                               #
@@ -307,7 +308,7 @@ class AVEnv(Env):
                     self.follower.append(follower)
 
         # Remove memory for exited vehicles.
-        for key in self._obs_history.keys():
+        for key in list(self._obs_history.keys()):
             if key not in self.k.vehicle.get_rl_ids():
                 del self._obs_history[key]
 

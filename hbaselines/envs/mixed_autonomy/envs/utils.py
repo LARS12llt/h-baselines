@@ -11,6 +11,10 @@ EXTRA_LANE_EDGES = [
     ":119257908#1-AddedOffRampNode_0",
     "119257908#3",
 ]
+# a normalizing term for the vehicle headways
+MAX_HEADWAY = 20.0
+# a normalizing term for the vehicle speeds
+MAX_SPEED = 1.0
 
 
 def get_relative_obs(env, veh_id):
@@ -45,22 +49,19 @@ def get_relative_obs(env, veh_id):
     """
     obs = [None for _ in range(5)]
 
-    # used to handle missing observations of adjacent vehicles
-    max_speed = env.k.network.max_speed()
-    max_length = env.k.network.length()
-
     # Add the speed of the ego vehicle.
-    obs[0] = env.k.vehicle.get_speed(veh_id, error=0)
+    obs[0] = env.k.vehicle.get_speed(veh_id, error=0) / MAX_SPEED
 
     # Add the speed and bumper-to-bumper headway of leading vehicles.
     leader = env.k.vehicle.get_leader(veh_id)
     if leader in ["", None]:
         # in case leader is not visible
-        lead_speed = max_speed
-        lead_head = max_length
+        lead_speed = 10.0 / MAX_SPEED
+        lead_head = 100.0 / MAX_HEADWAY
     else:
-        lead_speed = env.k.vehicle.get_speed(leader, error=0)
-        lead_head = env.k.vehicle.get_headway(veh_id, error=0)
+        lead_speed = env.k.vehicle.get_speed(leader, error=0) / MAX_SPEED
+        lead_head = min(
+            env.k.vehicle.get_headway(veh_id, error=0), 100.0) / MAX_HEADWAY
         env.leader.append(leader)
 
     obs[1] = lead_speed
@@ -70,11 +71,12 @@ def get_relative_obs(env, veh_id):
     follower = env.k.vehicle.get_follower(veh_id)
     if follower in ["", None]:
         # in case follower is not visible
-        follow_speed = max_speed
-        follow_head = max_length
+        follow_speed = 10.0 / MAX_SPEED
+        follow_head = 100.0 / MAX_HEADWAY
     else:
-        follow_speed = env.k.vehicle.get_speed(follower, error=0)
-        follow_head = env.k.vehicle.get_headway(follower, error=0)
+        follow_speed = env.k.vehicle.get_speed(follower, error=0) / MAX_SPEED
+        follow_head = min(
+            env.k.vehicle.get_headway(follower, error=0), 100.0) / MAX_HEADWAY
         env.follower.append(follower)
 
     obs[3] = follow_speed
